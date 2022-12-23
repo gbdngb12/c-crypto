@@ -7,6 +7,7 @@
 
 typedef unsigned char byte;
 typedef unsigned int uint;
+typedef unsigned long long uint64;
 
 // DES 암호화 함수
 void des_encryption(byte *plain_text, byte *result, byte *key);
@@ -40,10 +41,10 @@ uint circular_shift(uint n, int r);
 void byte_to_word(byte *in, uint *x, uint *y);
 // word를 byte로 바꾸는 함수
 void word_to_byte(uint l, uint r, byte *out);
-// des_ofb Mode 암호화 함수
-void des_ofb_encryption(byte *message, byte *result, byte *iv, byte *key, int msg_len);
-// des_ofb Mode 복호화 함수
-void des_ofb_decryption(byte *message, byte *result, byte *iv, byte *key, int msg_len);
+// des_ctr Mode 암호화 함수
+void des_ctr_encryption(byte *plain_text, byte *result, byte *key, uint64 ctr, int msg_len);
+// des_ctr Mode 복호화 함수
+void des_ctr_decryption(byte *cipher_text, byte *result, byte *key, uint64 ctr,int msg_len);
 
 // 초기 순열 테이블
 int initial_permutation_table[64] = {
@@ -156,7 +157,7 @@ int main() {
     byte cipher_text[128] = {0};       // 암호문
     byte decrypt_text[128] = {0};      // 복호문
     byte key[9] = {0};                 // 비밀 키
-    byte iv[9] = { 0 }; //초기 벡터 BLOCK_SIZE + 1(NULL byte)
+    u_int64_t ctr = 0;//counter
 
     printf("Input plain text: ");
     gets(plain_text);
@@ -164,12 +165,12 @@ int main() {
     printf("Input secret Key: ");
     scanf("%s", key);
 
-    printf("Input Initial Vector: ");
-    scanf("%s", iv);
+    printf("Input Couter: ");
+    scanf("%lu", &ctr);
 
     msg_len = ((int)strlen((char *)plain_text) % BLOCK_SIZE) ? ((strlen((char *)plain_text) / BLOCK_SIZE + 1) * 8) : strlen((char *)plain_text);
 
-    des_ofb_encryption(plain_text, cipher_text, iv, key, msg_len);//des_ofb 암호화
+    des_ctr_encryption(plain_text, cipher_text, key, ctr,msg_len);//des_ctr 암호화
     
     printf("\nCipher Text: ");
     for (i = 0; i < msg_len; i++) {
@@ -177,7 +178,7 @@ int main() {
     }
     printf("\n");
 
-    des_ofb_decryption(cipher_text, decrypt_text, iv, key, msg_len); //des_ofb 복호화
+    des_ctr_decryption(cipher_text, decrypt_text, key, ctr, msg_len);  // des_ctr 복호화
     printf("\nDecrypt Text: ");
     for (i = 0; i < msg_len; i++) {
         printf("%c", decrypt_text[i]);
@@ -305,7 +306,7 @@ void permuted_choice_1(byte *in, byte *out) {//64비트 -> 56비트
 void permuted_choice_2(uint c, uint d, byte *out) {
     int i;
     uint mask = 0x08000000; //0000 1000 ... 0000 0000 : 32bits
-
+    
     for(i = 0; i < 48;i++) {
         if((pc2_table[i] - 1) < 28) { //LK
             if(c & (mask >> (pc2_table[i] - 1))) { //i<28 번째 비트가 1이라면
@@ -441,51 +442,40 @@ void word_to_byte(uint l, uint r, byte *out) {
     }
 }
 
-void des_ofb_encryption(byte *message/*plain_text*/, byte *result/*cipher_text*/, byte *iv, byte *key, int msg_len) {
+// des_ctr Mode 암호화 함수
+void des_ctr_encryption(byte *plain_text, byte *result, byte *key, uint64 ctr/*8bytes*/, int msg_len) {
     int i, j;
-    byte vector[BLOCK_SIZE] = { 0 };
+    byte in[BLOCK_SIZE];
+    byte out[BLOCK_SIZE];
+    uint *p_ctr = (uint*)&ctr;
 
-    //초기 벡터 설정
-    for(i = 0; i < BLOCK_SIZE; i++) {
-        vector[i] = iv[i];
+    for (i = 0; i < msg_len; i += BLOCK_SIZE) {
+        word_to_byte(p_ctr[0], p_ctr[1], in);
+        des_encryption(in/*counter*/, out/*E(Counter, K)*/, key);
+
+        for(j = 0; j < BLOCK_SIZE; j++) {
+            result[i + j] = plain_text[i + j] ^ out[j];
+        }
+
+        ctr += 1;//counter 증가
     }
+}
+// des_ctr Mode 복호화 함수
+void des_ctr_decryption(byte *cipher_text, byte *result, byte *key, uint64 ctr,int msg_len) {
+    int i, j;
+    byte in[BLOCK_SIZE];
+    byte out[BLOCK_SIZE];
+    uint *p_ctr = (uint*)&ctr;
 
-    for(i = 0; i < msg_len; i+= BLOCK_SIZE) {
-        byte cipher_text[BLOCK_SIZE] = { 0 };
+    for (i = 0; i < msg_len; i += BLOCK_SIZE) {
+        word_to_byte(p_ctr[0], p_ctr[1], in);
+        des_encryption(in/*counter*/, out/*E(Counter, K)*/, key);
 
-        des_encryption(vector, cipher_text, key);//E(IV, K)
-        
         for(j = 0; j < BLOCK_SIZE; j++) {
-            result[i + j] = message[i + j] ^ cipher_text[j]; //E(IV, K) ^ P_0
+            result[i + j] = cipher_text[i + j] ^ out[j];
         }
 
-        for(j = 0; j < BLOCK_SIZE; j++) {
-            vector[j] = cipher_text[i + j]; //다음 초기벡터는 E(IV, K)
-        }
+        ctr += 1;//counter 증가
     }
 }
 
-void des_ofb_decryption(byte *message/*cipher_text*/, byte *result/*decrypt_text*/, byte *iv, byte *key, int msg_len) {
-    int i, j;
-    byte vector[BLOCK_SIZE] = { 0 };
-
-    //초기 벡터 설정
-    for(i = 0; i < BLOCK_SIZE; i++) {
-        vector[i] = iv[i];
-    }
-
-    for(i = 0; i < msg_len; i+=BLOCK_SIZE) {
-        byte cipher_text[BLOCK_SIZE] = { 0 };
-
-        des_encryption(vector, cipher_text, key);//E(IV, K)
-
-        for(j = 0; j < BLOCK_SIZE; j++) {
-            result[i + j] = message[i + j] ^ cipher_text[j];//P_0 = C_0 ^ E(IV, K)
-        }
-
-        //다음 초기 벡터 설정
-        for(j = 0; j < BLOCK_SIZE; j++) {
-            vector[j] = message[i + j];//E(IV,K)
-        }
-    }
-}
