@@ -10,7 +10,7 @@
 #define S12 12
 #define S13 17
 #define S14 22
-#define S21 5z
+#define S21 5
 #define S22 9
 #define S23 14
 #define S24 20
