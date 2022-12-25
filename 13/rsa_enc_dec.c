@@ -1,63 +1,178 @@
-#pragma once
-#include <fcntl.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <sys/stat.h>
-#include <time.h>
+#include "rsa_enc_dec.h"
 
-/* 상수 정의 */
-#define m 1024  // 모듈러 n의 비트 수
-#define mp 512  // 비밀 소수 p의 비트 수
-#define mq 512  // 비밀 소수 q의 비트 수
-#define HASH 128
-#define LEN_PS 8  // 패딩 스트링의 비트수
-#define DHEX 32
-#define OCT 8
-#define Char_NUM 8                   // char 비트수
-#define B_S m / Char_NUM             // 512바이트 ( 암호문 바이트 수 )
-#define DATA_LEN (B_S - LEN_PS - 3)  // 평문 블록 길이
-#define mb m / DHEX                  // 32
-#define hmb mb / 2                   // 16
-#define mpb mp / DHEX                // 16
-#define mqb mq / DHEX                // 16
-#define E_LENGTH 16
 
-#define rdx 0x100000000
+void rsa_encryption(unsigned char* plain_text, unsigned char* result) {
+    int i, count = 0;
+    short check = 1;
+    FILE* fptr;
 
-// 타입 정의
-typedef unsigned int ulint;
-typedef unsigned long int64;
-typedef unsigned int int32;
+    // 수신자의 공개키 파일을 연다.
+    if ((fptr = fopen("public_key.txt", "rb")) == NULL) {
+        printf("file open failed!!\n");
+        exit(1);
+    }
 
-// rsa의 연산과 관련된 함수들
-static void convert_oct_to_binary(int64 *A, short *B, short mn);                  // octet을 binary로 변환하는 함수
-static void convert_binary_to_oct(short *A, int64 *B, short mn);                  // binary를 octet로 변환하는 함수
-static void convert_radix_to_binary(int64 *A, short *B, short mn);                // Radix를 binary로 변환하는 함수
-static void convert_binary_to_radix(short *A, int64 *B, short mn);                // binary를 Radix로 변환하는 함수
-static void rand_generator(short *out, short n);                                  // 랜덤 수를 생성하는 함수
-static void modular(int64 *X, int64 *N, short mn);                                // 모듈러 연산을 수행하는 함수
-static void convert_mma(int64 *A, int64 *B, int64 *C, int64 *N, short mn);        // 고전적인 모듈러 감소 연산을 수행하는 함수
-static void left_to_right_pow(int64 *A, int64 *E, int64 *C, int64 *N, short mn);  // Left to Right 멱승을 수행하는 함수
+    // 파일로부터 공개키 e와 n을 저장한다.
+    for (i = mb - 1; i >= 0; i--) {
+        fscanf(fptr, "%I64x ", &N[i]);  // 공개키 N
+    }
+    for (i = mb - 1; i >= 0; i--) {
+        fscanf(fptr, "%I64x ", &E[i]);  // 공개키 e
+    }
 
-/* 전역 변수 */
-static int32 LAND = 0xFFFFFFFF;
+    fclose(fptr);
+    // 평문을 모두 암호화 할때 까지
+    // 117바이트씩 암호를 수행한다.(11 바이트 = 패딩)
+    while (check == 1) {
+        // 평문을 읽어 이진 형태로 저장한다.
+        check = get_from_message(plain_text + count * DATA_LEN, h, DATA_LEN);
 
-// 공개키 파라미터
-static int64 N[mb];  // 모듈러 n (= p * q)
-static int64 E[mb];  // 공개키 e
-static int64 D[mb];  // 비밀키 d
+        //
+        if (check != -1) {
+            convert_binary_to_oct(h, DATA, DATA_LEN);  // 이진 평문을 octet으로 변환
 
-/********************************************************************/
-/***********   Function name :  convert_binary_to_radix (a,B,mn)       **********/
-/***********   Description   :  convert bin. into radix    **********/
-/********************************************************************/
-static int64 mask[DHEX] = {0x80000000, 0x40000000, 0x20000000, 0x10000000, 0x8000000,
-                           0x4000000, 0x2000000, 0x1000000, 0x800000, 0x400000, 0x200000,
-                           0x100000, 0x080000, 0x040000, 0x020000, 0x010000,
-                           0x8000, 0x4000, 0x2000, 0x1000, 0x800,
-                           0x400, 0x200, 0x100, 0x80, 0x40, 0x20,
-                           0x10, 0x08, 0x04, 0x02, 0x01};
+            // OAEP 암호문 블록 패딩 (EB1 <- [00|02|PS|00|DATA])
+            rand_generator(ps, LEN_PS * 8);           // 패딩 스트링으로 사용할 랜덤 수 생성
+            convert_binary_to_oct(ps, O_PS, LEN_PS);  // 생성한 이진 랜덤수를 octet으로 변환
+
+            EB[mb * 4 - 1] = 0x00;
+            EB[mb * 4 - 2] = 0x02;
+
+            // PS padding
+            for (i = mb * 4 - 3; i > DATA_LEN; i--) {
+                EB[i] = O_PS[i - DATA_LEN - 1];
+            }
+
+            EB[DATA_LEN] = 0x00;
+
+            // data
+            for (i = DATA_LEN - 1; i >= 0; i--) {
+                EB[i] = DATA[i];
+            }
+
+            for (i = mb * 4 - 1; i >= 0; i -= 4) {
+                EB1[i / 4] = (EB[i] << (DHEX - OCT)) + (EB[i - 1] << (OCT + OCT)) + (EB[i - 2] << OCT) + EB[i - 3];
+            }
+            // 암호문 블록 패딩 종료
+
+            // C = M^e mod N (M - bit)
+            left_to_right_pow(EB1, E, S, N, mb);  // 수신자의 공개키로 암호화
+
+            // radix 형태의 암호문을 이진 형태로 변환
+            convert_radix_to_binary(S, s, mb);
+
+            // 이진 형태의 암호문을 바이트 형태로 변화하여 저장
+            put_to_message(result + count * B_S, s, B_S);
+
+            count++;
+        }
+    }
+}
+void rsa_decryption(unsigned char* cipher_text, unsigned char* result) {
+    int i, count = 0;
+    short check = 1;
+    FILE* fptr;
+
+    // 사용자의 비밀키 파일을 연다
+    if ((fptr = fopen("secret_key.txt", "rb")) == NULL) {
+        printf("file open failed!!\n");
+        exit(1);
+    }
+
+    // 파일로부터 공개키 d와 모듈러 n을 저장한다
+    for (i = mb - 1; i >= 0; i--) fscanf(fptr, "%I64x ", &N[i]);
+    for (i = mb - 1; i >= 0; i--) fscanf(fptr, "%I64x ", &D[i]);
+
+    fclose(fptr);
+
+    // 암호문을 모두 암호화 할 때까지
+    // 128 바이트씩 암호를 수행한다(11 바이트 = 패딩 포함)
+    while (check == 1 && count <= 2) {
+        // 암호문을 읽어 이진 형태로 저장한다
+        check = get_from_message(cipher_text + count * B_S, s, B_S);
+
+        if (check != -1) {
+            convert_binary_to_radix(s, S, mb);  // 이진 형태의 암호문을 Radix로 변환
+
+            /*** M = C^d mod N (M-bit) ***/
+            left_to_right_pow(S, D, H, N, mb);  // 사용자의 비밀키로 복호화
+
+            convert_radix_to_binary(H, v_h, mb);       // 복호화된 데이터를 이진 형태로 변환
+            convert_binary_to_oct(v_h, D_EB, mb * 4);  // 이진 형태의 데이터를 octet으로 변환
+
+            // 패딩을 제외한 복호문을 추출한다
+            for (i = DATA_LEN - 1; i >= 0; i--)
+                D_DATA[i] = D_EB[i];
+
+            // 추출한 복호문을 이진 형태로 변환
+            convert_oct_to_binary(D_DATA, d_d, DATA_LEN);
+            // 이진 형태의 복호문을 바이트 형태로 저장한다
+            put_to_message(result + count * DATA_LEN, d_d, DATA_LEN);
+
+            count++;
+        }
+    }
+}
+// 메시지를 읽어 이진 형태로 저장
+int get_from_message(unsigned char* msg, short* a, short mn) {
+    register i, j;
+    short flag = 1, cnt = 0, mm;
+    unsigned char b[m / Char_NUM] = {
+        0,
+    };
+
+    mm = mn * Char_NUM;
+
+    for (i = 0; i < mm; i++)
+        a[i] = 0;
+
+    // 메시지 버퍼에서 한 바이트씩 읽는다
+    for (i = 0; i < mn; i++) {
+        if (msg[i] == '\0') {
+            if (i == 0)
+                return -1;
+
+            if (mn < B_S) {
+                flag = 0;
+                break;
+            }
+        }
+
+        b[i] = msg[i];
+    }
+
+    cnt = 0;
+    // 바이트 단위의 데이터를 이진 형태로 변환
+    for (i = mn - 1; i >= 0; i--) {
+        for (j = 0; j < Char_NUM; j++) {
+            a[cnt++] = (b[i] >> j) & 0x01;
+        }
+    }
+
+    return (flag);
+}
+
+// 이진 형태의 데이터를 바이트 형태로 저장
+void put_to_message(unsigned char* msg, short* a, short mn) {
+    register i, j;
+    short cnt = 0;
+    unsigned char b[m / Char_NUM] = {
+        0,
+    };
+    unsigned char mask[Char_NUM] = {0x01, 0x02, 0x04, 0x08,
+                                    0x10, 0x20, 0x40, 0x80};
+
+    cnt = 0;
+    // 이진 형태의 데이터를 바이트 형태로 변환한다
+    for (i = mn - 1; i >= 0; i--) {
+        for (j = 0; j < Char_NUM; j++) {
+            b[i] = b[i] + a[cnt++] * mask[j];
+        }
+    }
+    // 변환한 데이터를 메시지 버퍼에 저장한다
+    for (i = 0; i < mn; i++)
+        msg[i] = b[i];
+}
 
 void convert_binary_to_radix(short *A, int64 *B, short mn) {
     register i, j, k;
@@ -259,8 +374,6 @@ void convert_mma(int64 *A, int64 *B, int64 *C, int64 *N, short mn) {
 /***********   Function name :  convert_binary_to_oct (a,B,mn)       **********/
 /***********   Description   :  convert bin. into octet    **********/
 /********************************************************************/
-static int64 o_mask[8] = {0x80, 0x40, 0x20, 0x10, 0x08, 0x04, 0x02, 0x01};
-
 void convert_binary_to_oct(short *A, int64 *B, short mn) {
     register i, j, k;
 
